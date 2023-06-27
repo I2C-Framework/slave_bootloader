@@ -1,0 +1,8 @@
+{
+    "requires": ["bare-metal"],
+    "target_overrides": {
+        "*": {
+            "target.restrict_size": "0x4000"
+        }
+    }
+}
