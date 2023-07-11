@@ -1,6 +1,7 @@
 #include "mbed.h"
 #include "FlashIAP.h"
 #include "ResetReason.h"
+#include <cstdint>
 
 #if !defined(POST_APPLICATION_ADDR)
 #error "target.restrict_size must be set for your target in mbed_app.json"
@@ -20,6 +21,7 @@
 
 #define MAGIC_NUMBER (0xdeadbeef)
 #define FIRMWARE_UPDATE_OK (0x97)
+#define FIRMWARE_UPDATE_NOK (0x0)
 
 typedef struct {
     uint32_t magic;
@@ -31,7 +33,7 @@ typedef struct {
 }__attribute__((__packed__)) app_metadata_t;
 
 void start_firmware();
-int is_soft_reset();
+int reset_type();
 int need_update_firmware();
 void set_update_firmware_flag(uint8_t flag);
 void init_i2c(I2CSlave *slave);
@@ -43,31 +45,45 @@ int main()
 {
     printf("Launching the bootloader\r\n");
 
-    if(is_soft_reset()){
+    uint8_t reset_reason = reset_type();
 
-        if(need_update_firmware()){
+    switch (reset_reason) {
+        case RESET_REASON_POWER_ON:
+            printf("Power On Reset\r\n");
+            break;
+        case RESET_REASON_PIN_RESET:
+            printf("Hardware Pin Reset\r\n");
+            break;
+        case RESET_REASON_SOFTWARE:
+            printf("Software Reset\r\n");
+            break;
+        case RESET_REASON_WATCHDOG:
+            printf("Watchdog Reset\r\n");
+        default:
+            printf("Other Reset Reason\r\n");
+            break;
+    }
 
-            I2CSlave slave(D14, D15);
-            init_i2c(&slave);
+    if((reset_reason == RESET_REASON_SOFTWARE && need_update_firmware()) || reset_reason == RESET_REASON_PIN_RESET){
 
-            printf("Bootloader ready for firmware update\r\n");
+        I2CSlave slave(D14, D15);
+        init_i2c(&slave);
 
-            wait_for_update_firmware(&slave);
-            
-        } else {
-            printf("No need update\r\n");
-        }        
+        printf("Bootloader ready for firmware update\r\n");
+
+        wait_for_update_firmware(&slave);
+   
     }
 
     if(!is_magic_valid()){
         printf("Magic number invalid\r\n");
-        set_update_firmware_flag(0);
+        set_update_firmware_flag(FIRMWARE_UPDATE_NOK);
         NVIC_SystemReset();
     }
 
     if(!is_crc_valid()){
         printf("CRC invalid\r\n");
-        set_update_firmware_flag(0);
+        set_update_firmware_flag(FIRMWARE_UPDATE_NOK);
         NVIC_SystemReset();
     }
 
@@ -114,8 +130,6 @@ void wait_for_update_firmware(I2CSlave *slave){
                 break;
             case I2CSlave::WriteAddressed:
                 rc = slave->read(firmware_part_buffer, BUFFER_SIZE);
-
-                //printf("0:%d, 1:%d, 2:%d, 3:%d\r\n", firmware_part_buffer[0], firmware_part_buffer[1], firmware_part_buffer[2], firmware_part_buffer[3]);
 
                 printf("Programming firmware part %d/%d\r\n", firmware_part_buffer[0], firmware_part_buffer[1]);
                 
@@ -218,9 +232,10 @@ int need_update_firmware(){
     }
 }
 
-int is_soft_reset()
+int reset_type()
 {
     const reset_reason_t reason = ResetReason::get();
+    return reason;
     switch (reason) {
         case RESET_REASON_POWER_ON:
             return 0;//Power On";
