@@ -3,70 +3,69 @@
 #include "ResetReason.h"
 #include <cstdint>
 
-#if !defined(POST_APPLICATION_ADDR)
-#error "target.restrict_size must be set for your target in mbed_app.json"
-#endif
-
-#define FIRMWARE_HEADER_ADDRESS 0x08009000
-#define FIRMWARE_APPLICATION_ADDRESS 0x08009400
-#define FIRMWARE_STATUS_ADDRESS 0x0801FF00
-#define END_MCU_ADDRESS 0x0801FFFF
-
-#define I2C_FREQ (400000)
-#define FIRMWARE_SIZE (0xF000)
-
-#define BUFFER_DATASIZE (2048)
-#define BUFFER_SIZE (BUFFER_DATASIZE + 1 + 1) // Buffer + block size + num block
+// Flash Addresses
+#define FIRMWARE_HEADER_ADDRESS (0x08009800)
+#define FIRMWARE_APPLICATION_ADDRESS (0x08009C00)
+#define APPLICATION_METADATA_ADDRESS (0x08009000)
+#define END_MCU_ADDRESS (0x0801FFFF)
 #define UNIQUE_ID_ADDR (0x1FFF7590)
 
-#define MAGIC_NUMBER (0xdeadbeef)
-#define FIRMWARE_UPDATE_OK (0x97)
-#define FIRMWARE_UPDATE_NOK (0x0)
+// Values
+#define I2C_FREQ (100000)
+#define FIRMWARE_SIZE (0xF000)
+#define BUFFER_DATASIZE (1024)
+#define BUFFER_SIZE (BUFFER_DATASIZE + 1 + 1) // Buffer + block size + num block
+#define MAGIC_FIRMWARE_VALID (0xDEADBEEF)
+#define MAGIC_FIRMWARE_NEED_UPDATE (0xDEADBEEF)
+#define MAGIC_FIRMWARE_NO_NEED_UPDATE (0xFFFFFFFF)
 
-typedef struct {
+// Struct for firmware header
+struct app_header_t {
     uint32_t magic;
     uint64_t firmware_size;
     uint32_t firmware_crc;
-    uint16_t major_version;
-    uint16_t minor_version;
-    uint16_t fix_version;
-}__attribute__((__packed__)) app_metadata_t;
+    uint8_t major_version;
+    uint8_t minor_version;
+    uint8_t fix_version;
+}__attribute__((__packed__));
 
+// Struct for bootloader metadata
+struct app_metadata_t{
+    uint32_t magic_firmware_need_update;
+    uint8_t group;
+    char sensor_type[30];
+    char name[30];
+};
+
+// Boot on firmware
 void start_firmware();
-int reset_type();
+// Check if firmware need to be updated
 int need_update_firmware();
-void set_update_firmware_flag(uint8_t flag);
+// Set new metadata in flash
+void set_new_metadata(app_metadata_t *metadata_ram);
+// Init I2C for firmware update
 void init_i2c(I2CSlave *slave);
+// Wait for firmware update
 void wait_for_update_firmware(I2CSlave *slave);
+// Check if magic number of firmware is valid
 int is_magic_valid();
+// Calculate CRC of firmware and compare it with the one in the header
 int is_crc_valid();
+
+DigitalOut led(LED_STATUS);
+app_metadata_t *metadata_flash = (app_metadata_t*) APPLICATION_METADATA_ADDRESS;
+app_metadata_t metadata_ram = *((app_metadata_t*) metadata_flash);
 
 int main()
 {
     printf("Launching the bootloader\r\n");
 
-    uint8_t reset_reason = reset_type();
+    led = 1;
 
-    switch (reset_reason) {
-        case RESET_REASON_POWER_ON:
-            printf("Power On Reset\r\n");
-            break;
-        case RESET_REASON_PIN_RESET:
-            printf("Hardware Pin Reset\r\n");
-            break;
-        case RESET_REASON_SOFTWARE:
-            printf("Software Reset\r\n");
-            break;
-        case RESET_REASON_WATCHDOG:
-            printf("Watchdog Reset\r\n");
-        default:
-            printf("Other Reset Reason\r\n");
-            break;
-    }
+    if(need_update_firmware()){// || reset_reason == RESET_REASON_PIN_RESET){
 
-    if((reset_reason == RESET_REASON_SOFTWARE && need_update_firmware()) || reset_reason == RESET_REASON_PIN_RESET){
-
-        I2CSlave slave(D14, D15);
+        
+        I2CSlave slave(I2C_FRAMEWORK_SDA, I2C_FRAMEWORK_SCL);
         init_i2c(&slave);
 
         printf("Bootloader ready for firmware update\r\n");
@@ -77,25 +76,30 @@ int main()
 
     if(!is_magic_valid()){
         printf("Magic number invalid\r\n");
-        set_update_firmware_flag(FIRMWARE_UPDATE_NOK);
+        metadata_ram.magic_firmware_need_update = MAGIC_FIRMWARE_NEED_UPDATE;
+        set_new_metadata(&metadata_ram);
         NVIC_SystemReset();
     }
 
     if(!is_crc_valid()){
         printf("CRC invalid\r\n");
-        set_update_firmware_flag(FIRMWARE_UPDATE_NOK);
+        metadata_ram.magic_firmware_need_update = MAGIC_FIRMWARE_NEED_UPDATE;
+        set_new_metadata(&metadata_ram);
         NVIC_SystemReset();
     }
 
-    set_update_firmware_flag(FIRMWARE_UPDATE_OK);
+    metadata_ram.magic_firmware_need_update = MAGIC_FIRMWARE_NO_NEED_UPDATE;
+    set_new_metadata(&metadata_ram);
+
+    led = 0;
 
     start_firmware();
 }
 
 int is_magic_valid(){
-    app_metadata_t *normal_firmware_header = (app_metadata_t*) FIRMWARE_HEADER_ADDRESS;
+    app_header_t *normal_firmware_header = (app_header_t*) FIRMWARE_HEADER_ADDRESS;
 
-    if(normal_firmware_header->magic != MAGIC_NUMBER){
+    if(normal_firmware_header->magic != MAGIC_FIRMWARE_VALID){
         return 0;
     } else {
         return 1;
@@ -103,7 +107,7 @@ int is_magic_valid(){
 }
 
 int is_crc_valid(){
-    app_metadata_t *normal_firmware_header = (app_metadata_t*) FIRMWARE_HEADER_ADDRESS;
+    app_header_t *normal_firmware_header = (app_header_t*) FIRMWARE_HEADER_ADDRESS;
     MbedCRC<POLY_32BIT_ANSI, 32> crc32;
     uint32_t crc;
 
@@ -120,11 +124,16 @@ void wait_for_update_firmware(I2CSlave *slave){
     char firmware_part_buffer[BUFFER_SIZE];
     FlashIAP flash;
     flash.init();
+    uint8_t response = 0x55;
+
+    led = 1;
 
     while(1){
         int i = slave->receive();
         switch (i) {
             case I2CSlave::ReadAddressed:
+                // Need for i2cdetect for specific range
+                rc = slave->write(response);
                 break;
             case I2CSlave::WriteGeneral:
                 break;
@@ -172,13 +181,18 @@ void init_i2c(I2CSlave *slave){
     slave->frequency(I2C_FREQ);
     slave->address(0);
 
-    thread_sleep_for(wait_time);
+    //ThisThread::sleep_for(wait_time);
+    HAL_Delay(wait_time);
 
-    I2C master(D14, D15);
+    led = 1;
+
+    I2C master(I2C_FRAMEWORK_SDA, I2C_FRAMEWORK_SCL);
 
     master.frequency(I2C_FREQ);
 
     char data[1] = {0x0};
+
+    //led = 1;
 
     do{
         rc = master.write(slave_addr << 1, data, 1, false);
@@ -192,22 +206,17 @@ void init_i2c(I2CSlave *slave){
     } while (rc == 0);
 }
 
-void set_update_firmware_flag(uint8_t flag){
+void set_new_metadata(app_metadata_t *metadata_ram){
     FlashIAP flash;
     int rc;
-    char status_buffer[1];
 
     flash.init();
-    uint32_t sector_size = flash.get_sector_size(FIRMWARE_STATUS_ADDRESS);
-    uint32_t sector_address = FIRMWARE_STATUS_ADDRESS - (FIRMWARE_STATUS_ADDRESS % sector_size);
-
-    rc = flash.erase(sector_address, sector_size);
+    rc = flash.erase(APPLICATION_METADATA_ADDRESS, 2048);
     if(rc != 0){
         printf("Error erasing firmware status\r\n");
     }
 
-    status_buffer[0] = flag;
-    rc = flash.program(status_buffer, sector_address, 1);
+    rc = flash.program(metadata_ram, APPLICATION_METADATA_ADDRESS, sizeof(app_metadata_t));
     if(rc != 0){
         printf("Error writing firmware status\r\n");
     }
@@ -215,38 +224,12 @@ void set_update_firmware_flag(uint8_t flag){
 }
 
 int need_update_firmware(){
-    FlashIAP flash;
-    char status_buffer[1];
+    app_metadata_t *metadata = (app_metadata_t*) APPLICATION_METADATA_ADDRESS;
 
-    flash.init();
-    uint32_t sector_size = flash.get_sector_size(FIRMWARE_STATUS_ADDRESS);
-    uint32_t sector_address = FIRMWARE_STATUS_ADDRESS - (FIRMWARE_STATUS_ADDRESS % sector_size);
-    flash.read(status_buffer, sector_address, 1);
-
-    flash.deinit();
-
-    if(status_buffer[0] == FIRMWARE_UPDATE_OK){
-        return 0;
-    } else {
+    if(metadata->magic_firmware_need_update == MAGIC_FIRMWARE_NEED_UPDATE){
         return 1;
-    }
-}
-
-int reset_type()
-{
-    const reset_reason_t reason = ResetReason::get();
-    return reason;
-    switch (reason) {
-        case RESET_REASON_POWER_ON:
-            return 0;//Power On";
-        case RESET_REASON_PIN_RESET:
-            return 0;//"Hardware Pin";
-        case RESET_REASON_SOFTWARE:
-            return 1;//"Software Reset";
-        case RESET_REASON_WATCHDOG:
-            return 0;//"Watchdog";
-        default:
-            return 0;//"Other Reason";
+    } else {
+        return 0;
     }
 }
 

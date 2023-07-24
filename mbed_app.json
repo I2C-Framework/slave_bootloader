@@ -3,7 +3,7 @@
     "target_overrides": {
         "*": {
             "target.c_lib": "small",
-            "target.restrict_size": "0x9000"
+            "target.restrict_size": "0x9800"
         }
     }
 }
