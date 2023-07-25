@@ -32,9 +32,9 @@ struct app_header_t {
 // Struct for bootloader metadata
 struct app_metadata_t{
     uint32_t magic_firmware_need_update;
-    uint8_t group;
-    char sensor_type[30];
-    char name[30];
+    uint32_t group;
+    char sensor_type[32];
+    char name[32];
 };
 
 // Boot on firmware
@@ -55,6 +55,10 @@ int is_crc_valid();
 DigitalOut led(LED_STATUS);
 app_metadata_t *metadata_flash = (app_metadata_t*) APPLICATION_METADATA_ADDRESS;
 app_metadata_t metadata_ram = *((app_metadata_t*) metadata_flash);
+
+bool isMaxValue(char c) {
+    return static_cast<unsigned char>(c) == 255;
+}
 
 int main()
 {
@@ -91,6 +95,13 @@ int main()
     metadata_ram.magic_firmware_need_update = MAGIC_FIRMWARE_NO_NEED_UPDATE;
     set_new_metadata(&metadata_ram);
 
+    if(all_of(metadata_ram.name, metadata_ram.name + 32, isMaxValue)){
+        strncpy(metadata_ram.name, "Default name", 32);
+        metadata_ram.group = 0;
+        strncpy(metadata_ram.sensor_type, "Default type", 32);
+        set_new_metadata(&metadata_ram);
+    }
+    
     led = 0;
 
     start_firmware();
