@@ -62,9 +62,7 @@ int main()
 
     led = 1;
 
-    if(need_update_firmware()){// || reset_reason == RESET_REASON_PIN_RESET){
-
-        
+    if(need_update_firmware()){
         I2CSlave slave(I2C_FRAMEWORK_SDA, I2C_FRAMEWORK_SCL);
         init_i2c(&slave);
 
@@ -156,7 +154,11 @@ void wait_for_update_firmware(I2CSlave *slave){
                 // If first part, erase all firmware
                 if(firmware_part_buffer[0] == 1){
                     printf("Erasing...\n");
-                    rc = flash.erase(FIRMWARE_HEADER_ADDRESS, firmware_part_buffer[1] * BUFFER_DATASIZE);
+                    uint32_t firmware_size = firmware_part_buffer[1] * BUFFER_DATASIZE;
+                    if(firmware_size % flash.get_sector_size(FIRMWARE_HEADER_ADDRESS) != 0){
+                        firmware_size = (firmware_size / flash.get_sector_size(FIRMWARE_HEADER_ADDRESS) + 1) * flash.get_sector_size(FIRMWARE_HEADER_ADDRESS);
+                    }
+                    rc = flash.erase(FIRMWARE_HEADER_ADDRESS, firmware_size);
                     if(rc != 0){
                         printf("Error on erase : %d\r\n", rc);
                         NVIC_SystemReset();
