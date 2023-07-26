@@ -24,9 +24,7 @@ struct app_header_t {
     uint32_t magic;
     uint64_t firmware_size;
     uint32_t firmware_crc;
-    uint8_t major_version;
-    uint8_t minor_version;
-    uint8_t fix_version;
+    unsigned char firmware_version_hash[32];
 }__attribute__((__packed__));
 
 // Struct for bootloader metadata
@@ -51,14 +49,12 @@ void wait_for_update_firmware(I2CSlave *slave);
 int is_magic_valid();
 // Calculate CRC of firmware and compare it with the one in the header
 int is_crc_valid();
+// Check if char is max value
+bool is_max_value(char c);
 
 DigitalOut led(LED_STATUS);
 app_metadata_t *metadata_flash = (app_metadata_t*) APPLICATION_METADATA_ADDRESS;
 app_metadata_t metadata_ram = *((app_metadata_t*) metadata_flash);
-
-bool isMaxValue(char c) {
-    return static_cast<unsigned char>(c) == 255;
-}
 
 int main()
 {
@@ -95,16 +91,20 @@ int main()
     metadata_ram.magic_firmware_need_update = MAGIC_FIRMWARE_NO_NEED_UPDATE;
     set_new_metadata(&metadata_ram);
 
-    if(all_of(metadata_ram.name, metadata_ram.name + 32, isMaxValue)){
+    if(all_of(metadata_ram.name, metadata_ram.name + 32, is_max_value)){
         strncpy(metadata_ram.name, "Default name", 32);
         metadata_ram.group = 0;
         strncpy(metadata_ram.sensor_type, "Default type", 32);
         set_new_metadata(&metadata_ram);
     }
-    
+
     led = 0;
 
     start_firmware();
+}
+
+bool is_max_value(char c) {
+    return static_cast<unsigned char>(c) == 255;
 }
 
 int is_magic_valid(){
