@@ -1,7 +1,5 @@
 # Salve Bootloader
 
-Contains the bootloader code for the I2C framework
+Contains the bootloader code for the I2C framework.
 
-## Building
-
-Open the projet with Mbed Studio and build it
+All the necessary documentation is available here : [https://github.com/I2C-Framework/documentation](https://github.com/I2C-Framework/documentation)
